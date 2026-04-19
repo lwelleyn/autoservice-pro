@@ -47,7 +47,17 @@ A modern full-stack car service management application built with FastAPI, React
 
 ## Screenshots
 
-> _Screenshots coming soon_
+### Clients Management
+![Clients](docs/screenshots/clients.png)
+
+### Cars Management
+![Cars](docs/screenshots/cars.png)
+
+### Work Orders
+![Work Orders](docs/screenshots/work-orders.png)
+
+### API Documentation
+![API Docs](docs/screenshots/api-docs-1.png)
 
 ## Quick Start
 
