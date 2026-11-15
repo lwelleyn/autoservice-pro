@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-
-const API_URL = 'http://127.0.0.1:8000';
+import { carsApi, workOrdersApi } from '../api';
 
 const STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
@@ -9,35 +8,36 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
+const EMPTY_FORM = { car_id: '', description: '', status: 'pending' };
+
 export default function WorkOrdersPage() {
   const [workOrders, setWorkOrders] = useState([]);
   const [cars, setCars] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [error, setError] = useState('');
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
-  const [formData, setFormData] = useState({ car_id: '', description: '', status: 'pending' });
-
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   const fetchData = async () => {
     try {
-      const [ordersRes, carsRes] = await Promise.all([
-        fetch(`${API_URL}/work-orders`),
-        fetch(`${API_URL}/cars`),
-      ]);
-      const ordersData = await ordersRes.json();
-      const carsData = await carsRes.json();
+      const [ordersData, carsData] = await Promise.all([workOrdersApi.list(), carsApi.list()]);
       setWorkOrders(ordersData);
       setCars(carsData);
-    } catch {
-      setError('Failed to fetch data');
+      setLoadError('');
+    } catch (e) {
+      setLoadError(e.message);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const getCarInfo = (carId) => {
     const car = cars.find((c) => c.id === carId);
@@ -61,108 +61,128 @@ export default function WorkOrdersPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
+    setFormError('');
+    setSaving(true);
+    // Send only the fields the API expects.
+    const payload = {
+      car_id: Number(formData.car_id),
+      description: formData.description.trim(),
+      status: formData.status,
+    };
     try {
-      const payload = { ...formData, car_id: parseInt(formData.car_id) };
-      const url = editingOrder ? `${API_URL}/work-orders/${editingOrder.id}` : `${API_URL}/work-orders`;
-      const method = editingOrder ? 'PUT' : 'POST';
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('Failed to save work order');
-      await fetchData();
+      if (editingOrder) {
+        await workOrdersApi.update(editingOrder.id, payload);
+      } else {
+        await workOrdersApi.create(payload);
+      }
       closeModal();
+      await fetchData();
     } catch (e) {
-      setError(e.message);
+      setFormError(e.message);
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this work order?')) return;
+  const handleDelete = async (order) => {
+    if (!confirm(`Delete work order #${order.id}? This cannot be undone.`)) return;
+    setError('');
     try {
-      await fetch(`${API_URL}/work-orders/${id}`, { method: 'DELETE' });
+      await workOrdersApi.remove(order.id);
       await fetchData();
-    } catch {
-      setError('Failed to delete work order');
+    } catch (e) {
+      setError(`Failed to delete work order: ${e.message}`);
     }
   };
 
   const openModal = (order = null) => {
     setEditingOrder(order);
-    setFormData(order || { car_id: cars.length > 0 ? cars[0].id : '', description: '', status: 'pending' });
+    setFormData(
+      order
+        ? { car_id: order.car_id, description: order.description, status: order.status }
+        : { ...EMPTY_FORM, car_id: cars.length > 0 ? cars[0].id : '' }
+    );
+    setFormError('');
     setShowModal(true);
   };
 
   const closeModal = () => {
     setShowModal(false);
     setEditingOrder(null);
-    setFormData({ car_id: '', description: '', status: 'pending' });
+    setFormData(EMPTY_FORM);
+    setFormError('');
   };
 
   if (loading) return <div className="loading">Loading...</div>;
+
+  const noCars = !loadError && cars.length === 0;
 
   return (
     <div>
       <div className="page-header">
         <h2>Work Orders</h2>
-        <button className="btn btn-primary" onClick={() => openModal()} disabled={cars.length === 0}>+ Add Work Order</button>
+        <button className="btn btn-primary" onClick={() => openModal()} disabled={!!loadError || noCars}>
+          + Add Work Order
+        </button>
       </div>
 
-      {cars.length === 0 && (
-        <div className="error" style={{ background: '#fef3c7', color: '#92400e' }}>
-          Add a car first before creating work orders
-        </div>
-      )}
+      {noCars && <div className="warning">Add a car first before creating work orders</div>}
 
       {error && <div className="error">{error}</div>}
 
-      <div className="card">
-        {workOrders.length === 0 ? (
-          <div className="empty-state">
-            <h3>No work orders yet</h3>
-            <p>Create your first work order to get started</p>
-          </div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Car</th>
-                <th>Description</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workOrders.map((order) => (
-                <tr key={order.id}>
-                  <td>{order.id}</td>
-                  <td>{getCarInfo(order.car_id)}</td>
-                  <td>{order.description}</td>
-                  <td>
-                    <span className={`status-badge ${getStatusClass(order.status)}`}>
-                      {getStatusLabel(order.status)}
-                    </span>
-                  </td>
-                  <td>{new Date(order.created_at).toLocaleDateString()}</td>
-                  <td className="actions">
-                    <button className="btn btn-secondary btn-small" onClick={() => openModal(order)}>Edit</button>
-                    <button className="btn btn-danger btn-small" onClick={() => handleDelete(order.id)}>Delete</button>
-                  </td>
+      {loadError ? (
+        <div className="error">
+          Failed to load work orders: {loadError}{' '}
+          <button className="btn btn-secondary btn-small" onClick={fetchData}>Retry</button>
+        </div>
+      ) : (
+        <div className="card">
+          {workOrders.length === 0 ? (
+            <div className="empty-state">
+              <h3>No work orders yet</h3>
+              <p>Create your first work order to get started</p>
+            </div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Car</th>
+                  <th>Description</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </thead>
+              <tbody>
+                {workOrders.map((order) => (
+                  <tr key={order.id}>
+                    <td>{order.id}</td>
+                    <td>{getCarInfo(order.car_id)}</td>
+                    <td>{order.description}</td>
+                    <td>
+                      <span className={`status-badge ${getStatusClass(order.status)}`}>
+                        {getStatusLabel(order.status)}
+                      </span>
+                    </td>
+                    <td>{new Date(order.created_at).toLocaleDateString()}</td>
+                    <td className="actions">
+                      <button className="btn btn-secondary btn-small" onClick={() => openModal(order)}>Edit</button>
+                      <button className="btn btn-danger btn-small" onClick={() => handleDelete(order)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {showModal && (
         <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>{editingOrder ? 'Edit Work Order' : 'Add Work Order'}</h3>
+            {formError && <div className="error">{formError}</div>}
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <label>Car</label>
@@ -184,6 +204,7 @@ export default function WorkOrdersPage() {
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   rows={3}
+                  maxLength={500}
                   required
                 />
               </div>
@@ -201,7 +222,9 @@ export default function WorkOrdersPage() {
               </div>
               <div className="form-actions">
                 <button type="button" className="btn btn-secondary" onClick={closeModal}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
               </div>
             </form>
           </div>

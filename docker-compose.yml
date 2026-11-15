@@ -1,17 +1,27 @@
-version: '3.8'
+# Settings and passwords come from .env (see .env.example):
+#   cp .env.example .env && docker compose up --build
 
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # Dev mode: apply migrations, then run with auto-reload on code changes.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://autoservice:autoservice@db:5432/autoservice
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autoservice}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env - run cp .env.example .env}@db:5432/${POSTGRES_DB:-autoservice}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
     volumes:
       - ./backend:/app
 
@@ -22,47 +32,56 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     volumes:
       - ./frontend:/app
       - /app/node_modules
 
   db:
     image: postgres:16-alpine
-    ports:
-      - "5432:5432"
+    # The database is reachable by other services as db:5432 and is not published
+    # to the host. For local development outside Docker (psql, running the backend
+    # or alembic from the host), uncomment:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
     environment:
-      - POSTGRES_USER=autoservice
-      - POSTGRES_PASSWORD=autoservice
-      - POSTGRES_DB=autoservice
+      - POSTGRES_USER=${POSTGRES_USER:-autoservice}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env - run cp .env.example .env}
+      - POSTGRES_DB=${POSTGRES_DB:-autoservice}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U autoservice"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.0.1
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.4.0
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env - run cp .env.example .env}
       - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
 

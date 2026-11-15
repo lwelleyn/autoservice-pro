@@ -1,13 +1,20 @@
 # Python
 backend/venv/
-backend/__pycache__/
+__pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 
 # Node
 frontend/node_modules/
+frontend/dist/
 
 # Docker
 postgres_data/
 
-# ENV files
+# ENV files (.env.example is the committed template)
 .env
+
+# Editor / tooling
+docs/.obsidian/
+.opencode/

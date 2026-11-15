@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# FastAPI's Depends() in argument defaults is the intended usage.
+# UP017: we use datetime.now(timezone.utc) on purpose.
+ignore = ["B008", "UP017"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
