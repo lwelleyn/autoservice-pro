@@ -1,36 +1,40 @@
 import { useState, useEffect } from 'react';
+import { carsApi, clientsApi } from '../api';
 
-const API_URL = 'http://127.0.0.1:8000';
+const EMPTY_FORM = { client_id: '', brand: '', model: '', year: '', vin: '' };
+const MIN_YEAR = 1900;
+const MAX_YEAR = new Date().getFullYear() + 1;
+// 17 characters: digits and Latin letters except I, O, Q (same rule as the backend).
+const VIN_PATTERN = '[A-HJ-NPR-Za-hj-npr-z0-9]{17}';
 
 export default function CarsPage() {
   const [cars, setCars] = useState([]);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [error, setError] = useState('');
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingCar, setEditingCar] = useState(null);
-  const [formData, setFormData] = useState({ client_id: '', brand: '', model: '', year: '', vin: '' });
-
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   const fetchData = async () => {
     try {
-      const [carsRes, clientsRes] = await Promise.all([
-        fetch(`${API_URL}/cars`),
-        fetch(`${API_URL}/clients`),
-      ]);
-      const carsData = await carsRes.json();
-      const clientsData = await clientsRes.json();
+      const [carsData, clientsData] = await Promise.all([carsApi.list(), clientsApi.list()]);
       setCars(carsData);
       setClients(clientsData);
-    } catch {
-      setError('Failed to fetch data');
+      setLoadError('');
+    } catch (e) {
+      setLoadError(e.message);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const getClientName = (clientId) => {
     const client = clients.find((c) => c.id === clientId);
@@ -39,106 +43,131 @@ export default function CarsPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
+    setFormError('');
+    setSaving(true);
+    // Send only the fields the API expects.
+    const payload = {
+      client_id: Number(formData.client_id),
+      brand: formData.brand.trim(),
+      model: formData.model.trim(),
+      year: Number(formData.year),
+      vin: formData.vin.trim().toUpperCase(),
+    };
     try {
-      const payload = { ...formData, year: parseInt(formData.year), client_id: parseInt(formData.client_id) };
-      const url = editingCar ? `${API_URL}/cars/${editingCar.id}` : `${API_URL}/cars`;
-      const method = editingCar ? 'PUT' : 'POST';
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('Failed to save car');
-      await fetchData();
+      if (editingCar) {
+        await carsApi.update(editingCar.id, payload);
+      } else {
+        await carsApi.create(payload);
+      }
       closeModal();
+      await fetchData();
     } catch (e) {
-      setError(e.message);
+      setFormError(e.message);
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this car?')) return;
+  const handleDelete = async (car) => {
+    const message =
+      `Delete ${car.brand} ${car.model} (${car.vin})?\n\n` +
+      'All work orders of this car will be deleted too. This cannot be undone.';
+    if (!confirm(message)) return;
+    setError('');
     try {
-      await fetch(`${API_URL}/cars/${id}`, { method: 'DELETE' });
+      await carsApi.remove(car.id);
       await fetchData();
-    } catch {
-      setError('Failed to delete car');
+    } catch (e) {
+      setError(`Failed to delete car: ${e.message}`);
     }
   };
 
   const openModal = (car = null) => {
     setEditingCar(car);
-    setFormData(car || { client_id: clients.length > 0 ? clients[0].id : '', brand: '', model: '', year: '', vin: '' });
+    setFormData(
+      car
+        ? { client_id: car.client_id, brand: car.brand, model: car.model, year: car.year, vin: car.vin }
+        : { ...EMPTY_FORM, client_id: clients.length > 0 ? clients[0].id : '' }
+    );
+    setFormError('');
     setShowModal(true);
   };
 
   const closeModal = () => {
     setShowModal(false);
     setEditingCar(null);
-    setFormData({ client_id: '', brand: '', model: '', year: '', vin: '' });
+    setFormData(EMPTY_FORM);
+    setFormError('');
   };
 
   if (loading) return <div className="loading">Loading...</div>;
+
+  const noClients = !loadError && clients.length === 0;
 
   return (
     <div>
       <div className="page-header">
         <h2>Cars</h2>
-        <button className="btn btn-primary" onClick={() => openModal()} disabled={clients.length === 0}>+ Add Car</button>
+        <button className="btn btn-primary" onClick={() => openModal()} disabled={!!loadError || noClients}>
+          + Add Car
+        </button>
       </div>
 
-      {clients.length === 0 && (
-        <div className="error" style={{ background: '#fef3c7', color: '#92400e' }}>
-          Add a client first before adding cars
-        </div>
-      )}
+      {noClients && <div className="warning">Add a client first before adding cars</div>}
 
       {error && <div className="error">{error}</div>}
 
-      <div className="card">
-        {cars.length === 0 ? (
-          <div className="empty-state">
-            <h3>No cars yet</h3>
-            <p>Add your first car to get started</p>
-          </div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Brand</th>
-                <th>Model</th>
-                <th>Year</th>
-                <th>VIN</th>
-                <th>Owner</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cars.map((car) => (
-                <tr key={car.id}>
-                  <td>{car.id}</td>
-                  <td>{car.brand}</td>
-                  <td>{car.model}</td>
-                  <td>{car.year}</td>
-                  <td>{car.vin}</td>
-                  <td>{getClientName(car.client_id)}</td>
-                  <td className="actions">
-                    <button className="btn btn-secondary btn-small" onClick={() => openModal(car)}>Edit</button>
-                    <button className="btn btn-danger btn-small" onClick={() => handleDelete(car.id)}>Delete</button>
-                  </td>
+      {loadError ? (
+        <div className="error">
+          Failed to load cars: {loadError}{' '}
+          <button className="btn btn-secondary btn-small" onClick={fetchData}>Retry</button>
+        </div>
+      ) : (
+        <div className="card">
+          {cars.length === 0 ? (
+            <div className="empty-state">
+              <h3>No cars yet</h3>
+              <p>Add your first car to get started</p>
+            </div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Brand</th>
+                  <th>Model</th>
+                  <th>Year</th>
+                  <th>VIN</th>
+                  <th>Owner</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </thead>
+              <tbody>
+                {cars.map((car) => (
+                  <tr key={car.id}>
+                    <td>{car.id}</td>
+                    <td>{car.brand}</td>
+                    <td>{car.model}</td>
+                    <td>{car.year}</td>
+                    <td>{car.vin}</td>
+                    <td>{getClientName(car.client_id)}</td>
+                    <td className="actions">
+                      <button className="btn btn-secondary btn-small" onClick={() => openModal(car)}>Edit</button>
+                      <button className="btn btn-danger btn-small" onClick={() => handleDelete(car)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {showModal && (
         <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>{editingCar ? 'Edit Car' : 'Add Car'}</h3>
+            {formError && <div className="error">{formError}</div>}
             <form onSubmit={handleSubmit}>
               <div className="form-group">
                 <label>Owner</label>
@@ -158,6 +187,7 @@ export default function CarsPage() {
                   type="text"
                   value={formData.brand}
                   onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
+                  maxLength={50}
                   required
                 />
               </div>
@@ -167,6 +197,7 @@ export default function CarsPage() {
                   type="text"
                   value={formData.model}
                   onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                  maxLength={50}
                   required
                 />
               </div>
@@ -176,8 +207,8 @@ export default function CarsPage() {
                   type="number"
                   value={formData.year}
                   onChange={(e) => setFormData({ ...formData, year: e.target.value })}
-                  min="1900"
-                  max="2030"
+                  min={MIN_YEAR}
+                  max={MAX_YEAR}
                   required
                 />
               </div>
@@ -187,13 +218,18 @@ export default function CarsPage() {
                   type="text"
                   value={formData.vin}
                   onChange={(e) => setFormData({ ...formData, vin: e.target.value })}
-                  maxLength="17"
+                  minLength={17}
+                  maxLength={17}
+                  pattern={VIN_PATTERN}
+                  title="17 characters: digits and Latin letters except I, O, Q"
                   required
                 />
               </div>
               <div className="form-actions">
                 <button type="button" className="btn btn-secondary" onClick={closeModal}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
               </div>
             </form>
           </div>
